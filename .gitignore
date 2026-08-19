@@ -1,0 +1,44 @@
+# Dependencies
+node_modules/
+**/node_modules/
+venv/
+**/venv/
+ENV/
+env/
+
+# Python
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Hardhat & Solidity
+contracts/artifacts/
+contracts/cache/
+contracts/types/
+contracts/coverage/
+contracts/.gas-snapshot/
+
+# Build outputs
+dist/
+**/dist/
+dist-ssr/
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
+logs/
+
+# Operating System / IDE files
+.DS_Store
+**/.DS_Store
+.vscode/
+.idea/
+*.swp
+*.swo
