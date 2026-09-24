@@ -1,0 +1,14 @@
+{
+  "name": "provai-network",
+  "version": "1.0.0",
+  "description": "ProvAI Network — AI-Powered Decentralized Oracle Network",
+  "private": true,
+  "scripts": {
+    "dev:frontend":  "cd frontend && npm run dev",
+    "dev:backend":   "cd backend && npm run dev",
+    "dev:ai":        "cd ai-engine && python app.py",
+    "read-chain":    "cd contracts && node scripts/read_anchored_data.js",
+    "install:all":   "cd frontend && npm install && cd ../backend && npm install",
+    "build":         "cd frontend && npm run build"
+  }
+}

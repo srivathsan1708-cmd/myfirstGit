@@ -34,6 +34,8 @@ contract ProvAINetwork {
 
     // ─── State ────────────────────────────────────────────────────────────────
 
+    uint256 public constant MIN_STAKE = 0.1 ether;
+
     mapping(bytes32  => OracleData) public verifiedData;
     mapping(address  => uint256)    public stakes;
 
@@ -119,12 +121,13 @@ contract ProvAINetwork {
 
     /**
      * @notice Submit AI-verified oracle data on-chain.
-     *         If the reward pool has funds and confidence > 80, an automatic
+     *         Requires submitter to have deposited at least MIN_STAKE (0.1 ETH).
+     *         If the reward pool has funds and confidence >= 95, an automatic
      *         confidence-scaled ETH reward is paid to the submitter.
      *
      * @param requestId       Unique identifier for this data request.
      * @param value           The verified consensus value (scaled ×100).
-     * @param confidenceScore AI ensemble confidence – must exceed 80.
+     * @param confidenceScore AI ensemble confidence – must exceed 95.
      * @param deviationScore  Worst outlier deviation in basis points.
      */
     function submitVerifiedData(
@@ -133,8 +136,8 @@ contract ProvAINetwork {
         uint256 confidenceScore,
         uint256 deviationScore
     ) external {
-        require(stakes[msg.sender] > 0, "No stake found for this node");
-        require(confidenceScore > 95, "ProvAI consensus confidence threshold not met");
+        require(stakes[msg.sender] >= MIN_STAKE, "Must stake at least 0.1 ETH to submit oracle data");
+        require(confidenceScore >= 95, "ProvAI consensus confidence threshold (>= 95%) not met");
 
         verifiedData[requestId] = OracleData({
             value:           value,
@@ -202,7 +205,7 @@ contract ProvAINetwork {
      *         given the current pool state. Returns 0 if pool is empty.
      */
     function calculateReward(uint256 confidenceScore) external view returns (uint256) {
-        if (rewardPool == 0 || confidenceScore <= 95) return 0;
+        if (rewardPool == 0 || confidenceScore < 95) return 0;
         uint256 poolPerRound  = (rewardPool * poolBasisPoints) / 10000;
         uint256 scaledFactor  = ((confidenceScore - 95) * 1000) / 5;
         uint256 reward        = (poolPerRound * scaledFactor) / 1000;

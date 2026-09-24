@@ -1,0 +1,49 @@
+{
+  "_format": "hh3-sol-build-info-1",
+  "id": "solc-0_8_28-80b001c18e1d35628e9e56eef12757e18f2851c6",
+  "solcVersion": "0.8.28",
+  "solcLongVersion": "0.8.28+commit.7893614a",
+  "compilerType": "solc",
+  "toolVersions": {
+    "hardhat": "3.9.1"
+  },
+  "userSourceNameMap": {
+    "contracts/ProvAINetwork.sol": "project/contracts/ProvAINetwork.sol"
+  },
+  "input": {
+    "language": "Solidity",
+    "settings": {
+      "evmVersion": "cancun",
+      "optimizer": {
+        "enabled": true,
+        "runs": 200
+      },
+      "outputSelection": {
+        "*": {
+          "": [
+            "ast"
+          ],
+          "*": [
+            "abi",
+            "evm.bytecode.linkReferences",
+            "evm.bytecode.object",
+            "evm.bytecode.opcodes",
+            "evm.bytecode.sourceMap",
+            "evm.deployedBytecode.immutableReferences",
+            "evm.deployedBytecode.linkReferences",
+            "evm.deployedBytecode.object",
+            "evm.deployedBytecode.opcodes",
+            "evm.deployedBytecode.sourceMap",
+            "evm.methodIdentifiers"
+          ]
+        }
+      },
+      "remappings": []
+    },
+    "sources": {
+      "project/contracts/ProvAINetwork.sol": {
+        "content": "// SPDX-License-Identifier: MIT\npragma solidity ^0.8.19;\n\n/**\n * @title ProvAINetwork\n * @notice Decentralized oracle with confidence-tied slashing AND confidence-scaled\n *         rewards for honest nodes.\n *\n * Reward mechanism:\n *  - Anyone can fund the shared reward pool via fundRewardPool().\n *  - Slashed ETH is automatically recycled into the reward pool (v2 fulfilment).\n *  - Each successful submitVerifiedData() call with confidence > 80 triggers\n *    an automatic payout scaled by confidence:\n *        reward = poolPerRound × (confidenceScore − 80) / 20\n *    where poolPerRound = rewardPool × poolBasisPoints / 10000\n *  - A totalRewards mapping accumulates lifetime earnings per node for a\n *    leaderboard.\n *\n * Slashing:\n *  - Penalties scale continuously with deviation severity (0–10000 bps).\n *  - Slashed ETH flows into rewardPool instead of sitting idle.\n */\ncontract ProvAINetwork {\n\n    // ─── Data Structures ──────────────────────────────────────────────────────\n\n    struct OracleData {\n        uint256 value;           // Verified value scaled ×100\n        uint256 confidenceScore; // AI ensemble confidence (0–100)\n        uint256 timestamp;\n        address provider;\n        uint256 deviationScore;  // Worst-outlier deviation in basis points\n    }\n\n    // ─── State ────────────────────────────────────────────────────────────────\n\n    uint256 public constant MIN_STAKE = 0.1 ether;\n\n    mapping(bytes32  => OracleData) public verifiedData;\n    mapping(address  => uint256)    public stakes;\n\n    /// @notice Lifetime rewards earned per oracle node (for leaderboard).\n    mapping(address  => uint256)    public totalRewards;\n\n    /// @notice Shared ETH pool from which rewards are paid out.\n    uint256 public rewardPool;\n\n    /**\n     * @notice Fraction of the reward pool paid out per winning submission,\n     *         in basis points (default 100 = 1%).\n     *         Governance: owner can adjust, bounded to [10, 1000].\n     */\n    uint256 public poolBasisPoints = 100;\n\n    address public owner;\n\n    // ─── Events ───────────────────────────────────────────────────────────────\n\n    event DataSubmitted(\n        bytes32 indexed requestId,\n        uint256 value,\n        uint256 confidence,\n        uint256 deviationScore\n    );\n    event StakeDeposited(address indexed node, uint256 amount);\n    event NodeSlashed(address indexed node, uint256 slashAmount, uint256 severityBps);\n\n    /**\n     * @notice Fired when a node earns a reward for a high-confidence submission.\n     * @param node   The rewarded oracle node.\n     * @param amount Wei transferred to the node.\n     * @param confidence The confidence score that triggered the reward.\n     */\n    event RewardPaid(address indexed node, uint256 amount, uint256 confidence);\n\n    /**\n     * @notice Fired when ETH is added to the reward pool.\n     * @param funder  The address that sent ETH.\n     * @param amount  Wei added to the pool.\n     * @param newPool New pool total after funding.\n     */\n    event PoolFunded(address indexed funder, uint256 amount, uint256 newPool);\n\n    // ─── Constructor ──────────────────────────────────────────────────────────\n\n    constructor() {\n        owner = msg.sender;\n    }\n\n    // ─── Modifiers ────────────────────────────────────────────────────────────\n\n    modifier onlyOwner() {\n        require(msg.sender == owner, \"Not owner\");\n        _;\n    }\n\n    // ─── Functions ────────────────────────────────────────────────────────────\n\n    /// @notice Lock ETH as oracle node stake.\n    function depositStake() external payable {\n        require(msg.value > 0, \"Must stake more than 0\");\n        stakes[msg.sender] += msg.value;\n        emit StakeDeposited(msg.sender, msg.value);\n    }\n\n    /// @notice Add ETH to the shared reward pool.\n    function fundRewardPool() external payable {\n        require(msg.value > 0, \"Must send ETH to fund pool\");\n        rewardPool += msg.value;\n        emit PoolFunded(msg.sender, msg.value, rewardPool);\n    }\n\n    /**\n     * @notice Adjust what fraction of the pool is paid per winning round.\n     * @param bps Basis points; must be between 10 (0.1%) and 1000 (10%).\n     */\n    function setPoolBasisPoints(uint256 bps) external onlyOwner {\n        require(bps >= 10 && bps <= 1000, \"bps must be 10-1000\");\n        poolBasisPoints = bps;\n    }\n\n    /**\n     * @notice Submit AI-verified oracle data on-chain.\n     *         Requires submitter to have deposited at least MIN_STAKE (0.1 ETH).\n     *         If the reward pool has funds and confidence >= 95, an automatic\n     *         confidence-scaled ETH reward is paid to the submitter.\n     *\n     * @param requestId       Unique identifier for this data request.\n     * @param value           The verified consensus value (scaled ×100).\n     * @param confidenceScore AI ensemble confidence – must exceed 95.\n     * @param deviationScore  Worst outlier deviation in basis points.\n     */\n    function submitVerifiedData(\n        bytes32 requestId,\n        uint256 value,\n        uint256 confidenceScore,\n        uint256 deviationScore\n    ) external {\n        require(stakes[msg.sender] >= MIN_STAKE, \"Must stake at least 0.1 ETH to submit oracle data\");\n        require(confidenceScore >= 95, \"ProvAI consensus confidence threshold (>= 95%) not met\");\n\n        verifiedData[requestId] = OracleData({\n            value:           value,\n            confidenceScore: confidenceScore,\n            timestamp:       block.timestamp,\n            provider:        msg.sender,\n            deviationScore:  deviationScore\n        });\n\n        emit DataSubmitted(requestId, value, confidenceScore, deviationScore);\n\n        // ── Confidence-scaled reward payout ───────────────────────────────────\n        // reward = poolPerRound × (confidence − 95) / 5\n        // confidence 100 → full poolPerRound; confidence 96 → 20% of poolPerRound\n        if (rewardPool > 0) {\n            uint256 poolPerRound = (rewardPool * poolBasisPoints) / 10000;\n            if (poolPerRound > 0) {\n                // Scale: (confidence - 95) / 5, using integer math ×1000\n                uint256 scaledFactor = ((confidenceScore - 95) * 1000) / 5; // 0–1000\n                uint256 reward = (poolPerRound * scaledFactor) / 1000;\n                if (reward > rewardPool) reward = rewardPool; // safety cap\n                if (reward > 0) {\n                    rewardPool -= reward;\n                    totalRewards[msg.sender] += reward;\n                    (bool sent, ) = payable(msg.sender).call{value: reward}(\"\");\n                    require(sent, \"Reward transfer failed\");\n                    emit RewardPaid(msg.sender, reward, confidenceScore);\n                }\n            }\n        }\n    }\n\n    /**\n     * @notice Confidence-tied slashing. Slashed ETH is recycled into rewardPool.\n     *\n     * slashAmount = stakes[node] × severityBps / 10000\n     *\n     * @param node        Address of the penalised node.\n     * @param severityBps Basis points of stake to slash (0–10000).\n     */\n    function slashNode(address node, uint256 severityBps) external {\n        require(severityBps <= 10000, \"Severity cannot exceed 100%\");\n        require(stakes[node] > 0, \"Node has no stake to slash\");\n\n        uint256 slashAmount = (stakes[node] * severityBps) / 10000;\n        stakes[node] -= slashAmount;\n\n        // Slashed ETH is recycled into the reward pool\n        rewardPool += slashAmount;\n\n        emit NodeSlashed(node, slashAmount, severityBps);\n        emit PoolFunded(address(this), slashAmount, rewardPool);\n    }\n\n    /**\n     * @notice View-only helper so the UI can preview the slash amount before submitting.\n     */\n    function calculateSlash(address node, uint256 severityBps) external view returns (uint256) {\n        if (stakes[node] == 0 || severityBps == 0) return 0;\n        return (stakes[node] * severityBps) / 10000;\n    }\n\n    /**\n     * @notice Preview the reward a node would earn for a given confidence score\n     *         given the current pool state. Returns 0 if pool is empty.\n     */\n    function calculateReward(uint256 confidenceScore) external view returns (uint256) {\n        if (rewardPool == 0 || confidenceScore < 95) return 0;\n        uint256 poolPerRound  = (rewardPool * poolBasisPoints) / 10000;\n        uint256 scaledFactor  = ((confidenceScore - 95) * 1000) / 5;\n        uint256 reward        = (poolPerRound * scaledFactor) / 1000;\n        return reward > rewardPool ? rewardPool : reward;\n    }\n}"
+      }
+    }
+  }
+}
